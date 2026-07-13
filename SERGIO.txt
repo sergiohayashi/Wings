@@ -1,0 +1,65 @@
+O WingsMetaForCausalLM.build() é a porta de entrada, para carregar o modelo.
+
+High-level picture: all three share the same multimodal “shell” (`LlavaMetaModel` + `WingsMetaForCausalLM`), but they differ in **backbone LLM** and whether they use the **Wings** cross-attention mechanism.
+
+### How selection works
+
+```104:108:wings/model/base_architecture.py
+    MODEL_MAPPING = {
+        "llava_qwen2": "LlavaQwen2ForCausalLM",
+        "wings_qwen2": "WingsQwen2ForCausalLM",
+        "wings_llama3_1": "WingsLlamaForCausalLM"
+    }
+```
+
+`WingsMetaForCausalLM.build(...)` looks up the string key and instantiates the matching class.
+
+---
+
+### 1. `LlavaQwen2ForCausalLM` — classic LLaVA on Qwen2
+
+- **Base LLM:** Qwen2
+- **Multimodal fusion:** LLaVA-style — vision tower → projector → image tokens spliced into the text embedding sequence (`prepare_base_multimodal_inputs`)
+- **Layers:** unmodified Qwen2 decoder layers; image info only enters via early embedding replacement
+- **No Wings modules:** no `WingsAttention`, no `ReweightLinear`, no layer monkey-patching
+
+This is the baseline multimodal model.
+
+---
+
+### 2. `WingsQwen2ForCausalLM` — Wings architecture on Qwen2
+
+- **Base LLM:** same Qwen2 family
+- **Multimodal fusion:** still encodes images and inserts them into the sequence, but via richer `prepare_multimodal_inputs` (also tracks image/text indices)
+- **Extra Wings mechanism:** in selected layers (`attn_layers_idx`), `initialize_modules` adds:
+  - `attn_pool` — cross-attend from sequence → **image** features
+  - `attn_t_pool` — cross-attend from sequence → **text** features  
+  - `reweight_module` — router that blends image vs text wing outputs from self-attention weights
+- Layer/model `forward` are replaced with Wings versions that inject those residual streams after self-attention
+
+Same backbone as LLaVA-Qwen2; the difference is the Wings “side paths” inside the transformer.
+
+---
+
+### 3. `WingsLlamaForCausalLM` — Wings architecture on Llama
+
+- **Base LLM:** Llama (mapped as `wings_llama3_1`)
+- **Multimodal + Wings:** essentially the same Wings design as `WingsQwen2ForCausalLM` (`WingsAttention`, `ReweightLinear`, patched layer forward)
+- **Implementation differences** come from Hugging Face Llama APIs: `cache_position`, shared rotary embeddings, newer `Cache` handling, slightly different mask prep
+
+Same Wings idea as Wings-Qwen2; different language backbone and HF wiring.
+
+---
+
+### Quick comparison
+
+| | LlavaQwen2 | WingsQwen2 | WingsLlama |
+|---|---|---|---|
+| LLM | Qwen2 | Qwen2 | Llama 3.1 |
+| Image → tokens (LLaVA) | Yes | Yes | Yes |
+| Wings cross-attn + router | No | Yes | Yes |
+| Role | LLaVA baseline | Wings on Qwen | Wings on Llama |
+
+So: **Llava vs Wings** = fusion style (early fusion only vs early fusion + per-layer Wings attentions). **WingsQwen2 vs WingsLlama** = which LLM the Wings modules wrap.
+
+---

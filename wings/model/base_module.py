@@ -98,6 +98,7 @@ class ReweightLinear(nn.Module):
         return list(splits)
 
 
+# SERGIO: Cross attention !!
 class WingsAttention(nn.Module):
     def __init__(self, config, layer_idx):
         super().__init__()
@@ -158,8 +159,8 @@ class WingsAttention(nn.Module):
         key: torch.Tensor,
         value: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids_q: Optional[torch.LongTensor] = None,
-        position_ids_image: Optional[torch.LongTensor] = None,
+        position_ids_q: Optional[torch.LongTensor] = None,    # SERGIO: Texto
+        position_ids_image: Optional[torch.LongTensor] = None,    # SERGIO: Imagem. Q: De onde vem as imagens?
         past_key_value: Optional[Cache] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
@@ -185,6 +186,9 @@ class WingsAttention(nn.Module):
         kv_seq_len = key_states.shape[-2]
 
         cos, sin = self.rotary_emb(query_states, seq_len=q_seq_len)
+        # SERGIO: Image RoPE: Q uses sequence positions; image K uses the absolute 
+        # positions # of the image token span so cross-attn respects the same 
+        # positional layout as early-fused image tokens.
         query_states, key_states = apply_rotary_pos_emb_with_position_ids(
             q=query_states,
             k=key_states,

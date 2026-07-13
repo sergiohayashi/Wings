@@ -72,6 +72,8 @@ class WingsQwen2Config(Qwen2Config):
         super(WingsQwen2Config, self).__init__(**kwargs)
 
 class WingsQwen2Model(LlavaMetaModel, Qwen2Model):
+        # LlavaMetaModel: multimodal converter
+        # Qwen2Model: base LLM model
     config_class = WingsQwen2Config
 
     def __init__(self, config: Qwen2Config):
@@ -128,6 +130,9 @@ def wings_layer_forward(self):
 
         hidden_states = residual + hidden_states
         hidden_states_wings = []
+
+        # SERGIO: Chama o cross attention para imagens (definido em WingsAttention)
+        # SERGIO image_features: encode_images => prepare_multimodal_inputs => 
         if image_features is not None and not isinstance(image_features, list) and position_ids_image is not None and len(position_ids_image) != 0:
             hidden_states_image, _, _ = self.attn_pool(
                 query=hidden_states,
@@ -142,6 +147,7 @@ def wings_layer_forward(self):
             )
             hidden_states_wings.append(hidden_states_image)
 
+        # SERGIO: Chama o cross attention para texto (definido em WingsAttention)
         if hasattr(self, 'reweight_module') and text_features is not None:
             hidden_states_text, _, _ = self.attn_t_pool(
                 query=hidden_states,
@@ -364,6 +370,7 @@ class WingsQwen2ForCausalLM(Qwen2ForCausalLM, WingsMetaForCausalLM):
         self.config.vision_tower_lr_follow_mm_projector = training_args.vision_tower_lr_follow_mm_projector
         self.config.lr_projector_follow_tuned_keys = training_args.lr_projector_follow_tuned_keys
 
+        # SERGIO: Cross attention start =>
         for cur_layer_index in model_args.attn_layers_idx:
             self.model.layers[cur_layer_index].attn_pool = WingsAttention(self.config, cur_layer_index).to(torch.bfloat16)
             self.model.layers[cur_layer_index].attn_t_pool = WingsAttention(self.config, cur_layer_index).to(torch.bfloat16)
@@ -373,6 +380,7 @@ class WingsQwen2ForCausalLM(Qwen2ForCausalLM, WingsMetaForCausalLM):
 
         for m in self.model.layers:
             m.forward = wings_layer_forward(m)
+        # SERGIO: Cross attention end <=
 
         self.model.forward = wings_forward(self.model)
 
@@ -390,9 +398,11 @@ class WingsQwen2ForCausalLM(Qwen2ForCausalLM, WingsMetaForCausalLM):
         images: Optional[torch.FloatTensor] = None,
         return_dict: Optional[bool] = None
     ) -> Union[Tuple, CausalLMOutputWithPast]:
+
+        # SERGIO: Aqui é obtido o 'image_features' que vai ser usado no cross attention para imagens.
         if inputs_embeds is None:
             (input_ids, position_ids, attention_mask, past_key_values, inputs_embeds, labels, i_t_indices, image_features
-            ) = self.prepare_multimodal_inputs(
+            ) = self.prepare_multimodal_inputs(   #SERGIO:definido em base_architecture.py
                 input_ids, position_ids, attention_mask, past_key_values, labels, images, get_image_features=True
             )
             text_features = inputs_embeds
@@ -459,7 +469,7 @@ class WingsQwen2ForCausalLM(Qwen2ForCausalLM, WingsMetaForCausalLM):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            image_features=image_features,
+            image_features=image_features,   # SERGIO: Passa o 'image_features' para o modelo.
             text_features=text_features,
             position_ids_image=position_ids_image,
             position_ids_text=position_ids_text,
